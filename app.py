@@ -11,7 +11,7 @@ st.set_page_config(page_title="Cricket Shot Analysis", layout="wide")
 @st.cache_data
 def load_data():
 
-    df = pd.read_xlsx("Womens T20.xlsx")
+    df = pd.read_excel("Womens T20.xlsx")
 
     df = df.sort_values(
         ["Match", "Innings", "Over", "Ball"]

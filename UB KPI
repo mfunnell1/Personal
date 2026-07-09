@@ -1,0 +1,124 @@
+# FOR BLAST DATA
+import pandas as pd
+import numpy as np
+from IPython.display import display  # for nice Jupyter tables
+
+# === SETTINGS ================================================================
+file_path = r"C:\Users\matthew.funnell\Documents\Data\Game Lists\Blast Data List.xlsx"
+sheet_name = "Game List"
+
+# 🏟️ Set the venue you want to filter for (case-insensitive match)
+venue_filter = "Utilita Bowl"   # ← change this to any ground name, e.g. "Headingley"
+
+# === LOAD THE DATA ============================================================
+df = pd.read_excel(file_path, sheet_name=sheet_name)
+print(f"Loaded '{file_path}' — {df.shape[0]} rows × {df.shape[1]} columns")
+
+# === DEFINE TARGET COLUMNS ====================================================
+target_inns1_col = "Bat1stWin"
+target_inns2_col = "Bowl1stWin"
+nr_tie_col = "NR/Tie"
+venue_col = "Venue"
+
+# === FILTER GAMES ============================================================
+df = df[df[nr_tie_col] != 1].copy()  # remove NR/Tie
+
+# Apply the venue filter if provided
+if venue_filter:
+    df = df[df[venue_col].str.contains(venue_filter, case=False, na=False)].copy()
+    print(f"Filtered to {len(df)} valid games at '{venue_filter}' (excluding NR/Tie)")
+else:
+    print(f"Filtered to {len(df)} valid games (no venue filter applied)")
+
+# === NEGATIVE KPI DEFINITIONS =================================================
+# KPIs where LOWER values are better
+NEGATIVE_KPIS = [
+    "Wkts", "DB%", "PPDB%", "MidDB%", "DeathDB%",
+    "PPWkts", "MidWkts", "DeathWkts"
+]
+
+# === HELPER FUNCTION =========================================================
+def kpi_win_rate(df, kpi_inns1, kpi_inns2):
+    """Calculate % of matches where having a better KPI (higher or lower depending on type) relates to winning."""
+    if kpi_inns1 not in df.columns or kpi_inns2 not in df.columns:
+        return None
+
+    # Determine if this KPI is a 'negative' one
+    kpi_name = kpi_inns1.replace("Inns1", "")
+    reverse = any(neg.lower() in kpi_name.lower() for neg in NEGATIVE_KPIS)
+
+    # Identify which innings had the 'better' KPI
+    if reverse:
+        df["_better_kpi_inns"] = np.where(df[kpi_inns1] < df[kpi_inns2], 1,
+                                     np.where(df[kpi_inns2] < df[kpi_inns1], 2, np.nan))
+    else:
+        df["_better_kpi_inns"] = np.where(df[kpi_inns1] > df[kpi_inns2], 1,
+                                     np.where(df[kpi_inns2] > df[kpi_inns1], 2, np.nan))
+
+    # Wins batting first
+    wins_first = df[target_inns1_col].sum()
+    wins_first_better = ((df["_better_kpi_inns"] == 1) & (df[target_inns1_col] == 1)).sum()
+
+    # Wins batting second
+    wins_second = df[target_inns2_col].sum()
+    wins_second_better = ((df["_better_kpi_inns"] == 2) & (df[target_inns2_col] == 1)).sum()
+
+    return {
+        "KPI": kpi_name,
+        "Bat1stWin": int(wins_first),
+        "Bat1stKPI": int(wins_first_better),
+        "Bat1stWin%": wins_first_better / wins_first * 100 if wins_first else np.nan,
+        "Bat2ndWin": int(wins_second),
+        "Bat2ndKPI": int(wins_second_better),
+        "Bat2ndWin%": wins_second_better / wins_second * 100 if wins_second else np.nan
+    }
+
+# === IDENTIFY KPI PAIRS ======================================================
+inns1_cols = [c for c in df.columns if c.startswith("Inns1")]
+inns2_cols = [c for c in df.columns if c.startswith("Inns2")]
+
+kpi_pairs = []
+for c in inns1_cols:
+    suffix = c.replace("Inns1", "")
+    match = f"Inns2{suffix}"
+    if match in inns2_cols:
+        kpi_pairs.append((c, match))
+
+print(f"Found {len(kpi_pairs)} KPI pairs for comparison")
+
+# === CALCULATE RESULTS ========================================================
+results = [kpi_win_rate(df, a, b) for a, b in kpi_pairs]
+results = [r for r in results if r is not None]
+summary_df = pd.DataFrame(results)
+
+# === ADD TOTAL % COLUMN =======================================================
+summary_df["Total_HigherKPI"] = summary_df["Bat1stKPI"] + summary_df["Bat2ndKPI"]
+summary_df["Total_Wins"] = summary_df["Bat1stWin"] + summary_df["Bat2ndWin"]
+summary_df["Win%"] = summary_df["Total_HigherKPI"] / summary_df["Total_Wins"] * 100
+
+# === SORT BY TOTAL WIN% DESCENDING ===========================================
+summary_df = summary_df.sort_values("Win%", ascending=False).reset_index(drop=True)
+
+# === DISPLAY RESULTS ==========================================================
+pd.set_option("display.max_rows", None)
+pd.set_option("display.precision", 2)
+
+if venue_filter:
+    print(f"\n🔹 KPI Win Rate Summary for {venue_filter} (sorted by Win% descending):")
+else:
+    print("\n🔹 KPI Win Rate Summary (all venues):")
+
+display(
+    summary_df.style.background_gradient(
+        subset=["Bat1stWin%", "Bat2ndWin%", "Win%"],
+        cmap="Blues"
+    ).format(precision=2)
+)
+
+# === EXPORT TO EXCEL =========================================================
+# Use the venue name in the output filename (safe for filenames)
+venue_safe = venue_filter.replace(" ", "_") if venue_filter else "AllVenues"
+output_path = fr"C:\Users\matthew.funnell\Documents\Data\KPI Summary Lists\BlastKPIList_{venue_safe}.xlsx"
+summary_df.to_excel(output_path, index=False)
+
+print(f"\n✅ Results exported to: {output_path}")
